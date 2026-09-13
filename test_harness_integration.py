@@ -314,6 +314,29 @@ def main():
 
     def flag(argv, name):
         return argv[argv.index(name) + 1] if name in argv else None
+
+    # Assets a submodule clone does not carry: passed only when declared.
+    saved_assets = {k: os.environ.pop(k, None) for k in ("PROSIM_CKPT", "PROSIM_LLAMA")}
+    try:
+        argv_noassets, _ = run_mod.build_argv(scen_s, policy_request, Path("/tmp/x/rollout.csv"),
+                                              harness_root=HARNESS,
+                                              policy_request_path="/tmp/policy.json")
+        os.environ["PROSIM_CKPT"] = "/assets/prosim_demo_model.ckpt"
+        os.environ["PROSIM_LLAMA"] = "/assets/Meta-Llama-3-8B-Instruct-HF"
+        argv_assets, _ = run_mod.build_argv(scen_s, policy_request, Path("/tmp/x/rollout.csv"),
+                                            harness_root=HARNESS,
+                                            policy_request_path="/tmp/policy.json")
+    finally:
+        for k, v in saved_assets.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+    check("PROSIM_CKPT / PROSIM_LLAMA become --ckpt / --llama",
+          flag(argv_assets, "--ckpt") == "/assets/prosim_demo_model.ckpt"
+          and flag(argv_assets, "--llama") == "/assets/Meta-Llama-3-8B-Instruct-HF",
+          f"{flag(argv_assets, '--ckpt')} / {flag(argv_assets, '--llama')}")
+    check("CONTROL: unset, neither flag is passed (rollout_carla's defaults apply)",
+          "--ckpt" not in argv_noassets and "--llama" not in argv_noassets)
     check("tfv6 is loaded from third_party/tfv6, found by its REPOSITORY",
           (flag(argv_s, "--ego-external") or "").endswith(
               "third_party/tfv6/scenario_orchestration/policy.py"),

@@ -434,6 +434,12 @@ def build_argv(request: dict, policy_request: dict, out_csv: Path,
         "--example-idx", str(int(parameters.get("example_idx", 0))),
         "--device", "cpu",
     ]
+    # The checkpoint and Llama weights are gitignored, so a submodule clone
+    # lacks them: the harness declares where they live, otherwise rollout_carla
+    # uses its repo-relative defaults.
+    for flag, env_name in (("--ckpt", "PROSIM_CKPT"), ("--llama", "PROSIM_LLAMA")):
+        if os.environ.get(env_name):
+            argv += [flag, os.environ[env_name]]
     policy_py = None
     sensor_worker = None
     if kind == "sensor":
