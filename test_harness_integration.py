@@ -337,6 +337,35 @@ def main():
           f"{flag(argv_assets, '--ckpt')} / {flag(argv_assets, '--llama')}")
     check("CONTROL: unset, neither flag is passed (rollout_carla's defaults apply)",
           "--ckpt" not in argv_noassets and "--llama" not in argv_noassets)
+
+    # Recordings and lane graphs ship in the repo's carla_data/.
+    saved_data = os.environ.pop("PROSIM_DATA_DIR", None)
+    try:
+        committed = run_mod.data_dir()
+        argv_data, _ = run_mod.build_argv(scen_s, policy_request, Path("/tmp/x/rollout.csv"),
+                                          harness_root=HARNESS,
+                                          policy_request_path="/tmp/policy.json")
+        os.environ["PROSIM_DATA_DIR"] = "/elsewhere/recordings"
+        overridden = run_mod.data_dir()
+        argv_over, _ = run_mod.build_argv(scen_s, policy_request, Path("/tmp/x/rollout.csv"),
+                                          harness_root=HARNESS,
+                                          policy_request_path="/tmp/policy.json")
+    finally:
+        os.environ.pop("PROSIM_DATA_DIR", None)
+        if saved_data is not None:
+            os.environ["PROSIM_DATA_DIR"] = saved_data
+    check("unset, the data dir is this repo's carla_data/ and is passed as --data-dir",
+          committed == REPO / "carla_data" and flag(argv_data, "--data-dir") == str(REPO / "carla_data"),
+          str(flag(argv_data, "--data-dir")))
+    check("CONTROL: PROSIM_DATA_DIR overrides it",
+          overridden == Path("/elsewhere/recordings")
+          and flag(argv_over, "--data-dir") == "/elsewhere/recordings")
+    sources = ["carla_town04__cut_in", "carla_town04__lane_change", "carla_town04__overtake",
+               "carla_town10hd__left_turn", "carla_town10hd__red_light", "carla_town10hd__right_turn"]
+    missing = [s for s in sources if not (committed / Path(run_mod.recording_path(s)).name).is_file()]
+    lanes = [t for t in ("town04", "town10hd") if not (committed / f"{t}_lanes.json").is_file()]
+    check("all six recordings and both lane graphs are committed in carla_data/",
+          not missing and not lanes, f"missing {missing} {lanes}")
     check("tfv6 is loaded from third_party/tfv6, found by its REPOSITORY",
           (flag(argv_s, "--ego-external") or "").endswith(
               "third_party/tfv6/scenario_orchestration/policy.py"),

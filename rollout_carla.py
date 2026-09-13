@@ -367,10 +367,11 @@ def main():
                          "coupling diagnostics only, NOT for CARLA playback. "
                          "Default: leave the config value alone.")
     ap.add_argument("--data-dir",
-                    default=os.environ.get("PROSIM_DATA_DIR", "/scratch/veerk41"),
+                    default=os.environ.get("PROSIM_DATA_DIR")
+                    or str(Path(__file__).resolve().parent / "carla_data"),
                     help="directory holding the CARLA recordings and lane "
                          "graphs (history_<town>__<scene>.csv, <town>_lanes.json); "
-                         "set here rather than in prosim/config/path_cfg.py")
+                         "default: PROSIM_DATA_DIR, else this repo's carla_data/")
     ap.add_argument("--source", default=None, metavar="NAME",
                     help="trajdata source to roll out, e.g. carla_town04 or "
                          "carla_town10hd. Overrides DATASET.SOURCE.<SPLIT> from "

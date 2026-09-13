@@ -233,11 +233,16 @@ def resolve_source(family: str, parameters: dict) -> str:
     return f"{town}__{scene}"
 
 
+def data_dir() -> Path:
+    """The recordings and lane graphs: PROSIM_DATA_DIR, else the ones committed
+    in this repo's carla_data/."""
+    return Path(os.environ.get("PROSIM_DATA_DIR") or REPO_ROOT / "carla_data")
+
+
 def recording_path(source: str) -> Path:
     """Where carla_dataset expects the recording for a scene-tagged source."""
-    data_dir = Path(os.environ.get("PROSIM_DATA_DIR", "/scratch/veerk41"))
     town, _, scene = source[len("carla_"):].partition("__")
-    return data_dir / f"history_{town}__{scene}.csv"
+    return data_dir() / f"history_{town}__{scene}.csv"
 
 
 def record_recipe(source: str, parameters: dict) -> str:
@@ -249,7 +254,8 @@ def record_recipe(source: str, parameters: dict) -> str:
             f"  record_actor_history.py --spawn-xy {xy or 'X Y ...'} --steps 150 "
             f"--four-wheels-only --out /workspace/agent_history_{town}__{scene}.json\n"
             f"  extract_csv.py --in /workspace/agent_history_{town}__{scene}.json "
-            f"--out /workspace/history_{town}__{scene}.csv")
+            f"--out /workspace/history_{town}__{scene}.csv\n"
+            f"  then copy history_{town}__{scene}.csv and {town}_lanes.json into {data_dir()}")
 
 
 def assign_actor_ids(recording: Path, parameters: dict, tol_m: float = 5.0) -> dict:
@@ -440,6 +446,7 @@ def build_argv(request: dict, policy_request: dict, out_csv: Path,
     for flag, env_name in (("--ckpt", "PROSIM_CKPT"), ("--llama", "PROSIM_LLAMA")):
         if os.environ.get(env_name):
             argv += [flag, os.environ[env_name]]
+    argv += ["--data-dir", str(data_dir())]
     policy_py = None
     sensor_worker = None
     if kind == "sensor":
