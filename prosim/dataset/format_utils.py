@@ -626,11 +626,14 @@ def get_local_io_pairs_T_step_batch(batch, cfg, split):
     io_pair_batch['init_vel'][bidxs, tidxs, nidxs] = init_vel
 
 
-    io_pair_batch['full_traj_xy'] = torch.zeros([B, N, pred_step*T, 2], dtype=torch.float) * torch.nan
+    # Size by the available future so SAMPLE_RATE < STEPS (replanning more often
+    # than every 1 s) works; identical to the original when pred_step*T == future.
+    _full_len = min(pred_step * T, batch.agent_fut.shape[2])
+    io_pair_batch['full_traj_xy'] = torch.zeros([B, N, _full_len, 2], dtype=torch.float) * torch.nan
     bidxs_full, oidxs_full, nidxs_full = zip(*[(bidx, oidx, nidx)
                                 for bidx in range(B)
                                 for nidx, oidx in enumerate(batch.tgt_agent_idxs[bidx])])
-    full_traj = batch.agent_fut[bidxs_full, oidxs_full][:, :pred_step*T]
+    full_traj = batch.agent_fut[bidxs_full, oidxs_full][:, :_full_len]
     full_traj = transform_to_frame_offset_rot(full_traj.numpy(), batch.agent_hist[bidxs_full, oidxs_full, -1:].numpy())
     full_traj = StateTensor.from_numpy(full_traj)
     io_pair_batch['full_traj_xy'][bidxs_full, nidxs_full] = full_traj.as_format('x,y').as_tensor().float()

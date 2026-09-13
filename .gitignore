@@ -13,3 +13,10 @@ __pycache__/
 .DS_Store
 
 */data_indexes/*
+Meta-Llama-3-8B-Instruct-HF/
+prosim_env/
+outputs/
+.prosim/
+demo_dataset/trajdata_cache/carla_*/
+*.bak.*
+demo_dataset/trajdata_cache/data_indexes/

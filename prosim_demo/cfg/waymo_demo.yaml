@@ -124,7 +124,7 @@ DATASET:
   CACHE_MAP: False
   USE_WAYMO_ROAD_EDGE: False
   USE_RASTER_MAP: False
-  USE_MOTION_TAGS: True
+  USE_MOTION_TAGS: False
 
   TYPE: 'prosim_imitation'
 

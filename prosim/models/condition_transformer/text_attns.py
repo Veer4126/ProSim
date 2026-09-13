@@ -144,9 +144,14 @@ class LlamaTextAttn(nn.Module):
         padding="longest",
         truncation=True,
         max_length=self.max_txt_len)
-  
-    text_inputs.input_ids = text_inputs.input_ids[:, 1:] # remove bos token
-    text_inputs.attention_mask = text_inputs.attention_mask[:, 1:] # remove bos token
+    
+    # Only strip BOS if the tokenizer actually added one.
+    if (
+        self.llm_tokenizer.bos_token_id is not None
+        and (text_inputs.input_ids[:, 0] == self.llm_tokenizer.bos_token_id).all()
+    ):
+        text_inputs.input_ids = text_inputs.input_ids[:, 1:]  # remove BOS token
+        text_inputs.attention_mask = text_inputs.attention_mask[:, 1:]  # remove BOS token
 
     input_ids = text_inputs.input_ids.to(device)
 
