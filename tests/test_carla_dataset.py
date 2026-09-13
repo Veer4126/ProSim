@@ -1,5 +1,12 @@
 """Smoke test for CarlaDataset. Runs inside prosim_v4.sif. CPU only."""
 
+# Run from anywhere: the repo root goes on the import path and becomes the
+# working directory (tests read prosim_demo/..., demo_dataset/... relatively).
+import os as _os, sys as _sys
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))  # realpath: works via symlinks
+_sys.path.insert(0, _REPO)
+_os.chdir(_REPO)
+
 import os
 import sys
 import shutil
@@ -7,16 +14,15 @@ from pathlib import Path
 
 # Resolve paths relative to THIS file, so the test works whether or not
 # /scratch/veerk41 is bind-mounted at /workspace. Override with:
-#   CARLA_DATA_DIR=/some/dir python3 test_carla_dataset.py
+#   CARLA_DATA_DIR=/some/dir python3 tests/test_carla_dataset.py
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
 
 import numpy as np
 
 from carla_dataset import CarlaDataset, register
 from trajdata import UnifiedDataset
 
-DATA_DIR = os.environ.get("CARLA_DATA_DIR", str(HERE.parent))  # recordings live one level above the repo
+DATA_DIR = os.environ.get("CARLA_DATA_DIR", str(HERE.parents[1]))  # recordings live one level above the repo
 CACHE_DIR = Path(DATA_DIR) / "carla_trajdata_cache"
 
 print(f"data dir:  {DATA_DIR}")

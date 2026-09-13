@@ -14,8 +14,15 @@ model, a GPU, or CARLA.
 
     apptainer exec -B /scratch/veerk41:/workspace \
         /scratch/veerk41/containers/prosim_v4.sif \
-        bash -c "cd /workspace/ProSim && python3 test_ego_frame_route.py"
+        bash -c "cd /workspace/ProSim && python3 tests/test_ego_frame_route.py"
 """
+
+# Run from anywhere: the repo root goes on the import path and becomes the
+# working directory (tests read prosim_demo/..., demo_dataset/... relatively).
+import os as _os, sys as _sys
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))  # realpath: works via symlinks
+_sys.path.insert(0, _REPO)
+_os.chdir(_REPO)
 
 import json
 import math
@@ -23,7 +30,6 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, "/scratch/veerk41/ProSim")
 
 from carla_dataset import register
 
@@ -52,7 +58,7 @@ def section(t):
     print("=" * 78)
 
 
-_DATA_DIR = __import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__)))  # recordings live one level above the repo
+_DATA_DIR = __import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__))))  # recordings live one level above the repo
 cfg = get_config("prosim_demo/cfg/waymo_demo.yaml", cluster="local")
 cfg.defrost()
 cfg.DATASET.SOURCE.TRAIN = ["carla_town10hd"]   # the yaml ships waymo_train

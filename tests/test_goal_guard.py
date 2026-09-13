@@ -9,15 +9,21 @@ gone to the wrong agent: agent at (-87.72, 16.46) heading -3.136, goal at
 
     apptainer exec -B /scratch/veerk41:/workspace \
         /scratch/veerk41/containers/prosim_v4.sif \
-        bash -c "cd /workspace/ProSim && python3 test_goal_guard.py"
+        bash -c "cd /workspace/ProSim && python3 tests/test_goal_guard.py"
 """
+
+# Run from anywhere: the repo root goes on the import path and becomes the
+# working directory (tests read prosim_demo/..., demo_dataset/... relatively).
+import os as _os, sys as _sys
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))  # realpath: works via symlinks
+_sys.path.insert(0, _REPO)
+_os.chdir(_REPO)
 
 import sys
 
 import numpy as np
 import torch
 
-sys.path.insert(0, "/scratch/veerk41/ProSim")
 
 from goal_control import (body_to_world, set_goal_condition, side_name,
                           world_to_body)

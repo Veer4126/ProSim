@@ -12,14 +12,20 @@ in Town10HD?" without needing the checkpoint, Llama, or a GPU.
 
     apptainer exec -B /scratch/veerk41:/workspace \
         /scratch/veerk41/containers/prosim_v4.sif \
-        bash -c "cd /workspace/ProSim && python3 test_prosim_ego.py"
+        bash -c "cd /workspace/ProSim && python3 tests/test_prosim_ego.py"
 """
+
+# Run from anywhere: the repo root goes on the import path and becomes the
+# working directory (tests read prosim_demo/..., demo_dataset/... relatively).
+import os as _os, sys as _sys
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))  # realpath: works via symlinks
+_sys.path.insert(0, _REPO)
+_os.chdir(_REPO)
 
 import sys
 
 import numpy as np
 
-sys.path.insert(0, "/scratch/veerk41/ProSim")
 
 from ego_control import IDM, VehicleState, make_policy, wrap_angle
 from prosim_ego import VecMapLaneGraph, local_to_world, world_to_local

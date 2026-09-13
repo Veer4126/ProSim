@@ -11,6 +11,13 @@ order, so --spawn-xy's order silently decides which car is the ego.
         python3 /workspace/test_spawn_xy.py
 """
 
+# Run from anywhere: the repo root goes on the import path and becomes the
+# working directory (tests read prosim_demo/..., demo_dataset/... relatively).
+import os as _os, sys as _sys
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))  # realpath: works via symlinks
+_sys.path.insert(0, _REPO)
+_os.chdir(_REPO)
+
 import math
 import sys
 import types
@@ -78,7 +85,6 @@ carla.Location, carla.Rotation, carla.Transform = Location, Rotation, Transform
 carla.LaneType = LaneType
 sys.modules["carla"] = carla
 
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 import record_actor_history as rah
 
 world = FakeWorld()

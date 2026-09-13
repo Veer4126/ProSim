@@ -13,6 +13,13 @@ fail, so a check that cannot fail is caught.
 
 from __future__ import annotations
 
+# Run from anywhere: the repo root goes on the import path and becomes the
+# working directory (tests read prosim_demo/..., demo_dataset/... relatively).
+import os as _os, sys as _sys
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))  # realpath: works via symlinks
+_sys.path.insert(0, _REPO)
+_os.chdir(_REPO)
+
 import json
 import math
 import os
@@ -21,7 +28,6 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, "/scratch/veerk41/ProSim")
 sys.path.insert(0, "/scratch/veerk41/scenario_orchestration/third_party/tfv6/scenario_orchestration")
 import sensor_worker as W
 import policy as P

@@ -16,10 +16,17 @@ Every positive assertion has a control that must fail. In particular:
   - the "trace is evaluable" check is paired with deleting states.jsonl, which
     must make it unevaluable -- otherwise the check proves nothing.
 
-    python3 test_harness_integration.py
+    python3 tests/test_harness_integration.py
 """
 
 from __future__ import annotations
+
+# Run from anywhere: the repo root goes on the import path and becomes the
+# working directory (tests read prosim_demo/..., demo_dataset/... relatively).
+import os as _os, sys as _sys
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))  # realpath: works via symlinks
+_sys.path.insert(0, _REPO)
+_os.chdir(_REPO)
 
 import json
 import math
@@ -30,8 +37,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-HARNESS = Path("/home/veerk41/scratch/scenario_orchestration")
-REPO = Path("/scratch/veerk41/ProSim")
+HARNESS = Path(os.environ.get("SCENARIO_ORCHESTRATION_ROOT")
+               or "/home/veerk41/scratch/scenario_orchestration")
+REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS / "src"))
 sys.path.insert(0, str(HARNESS))
 
@@ -50,7 +58,7 @@ def banner(text):
 def pick_rollout_csv() -> Path:
     """A real rollout export to stand in for the model call: the harness's own
     cut_in x idm rollout, committed so the test runs from a fresh clone."""
-    path = REPO / "test_fixtures" / "rollout_cut_in.csv"
+    path = REPO / "tests" / "fixtures" / "rollout_cut_in.csv"
     if not path.is_file():
         raise SystemExit(f"missing test fixture {path}")
     return path

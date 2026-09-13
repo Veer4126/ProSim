@@ -1,6 +1,6 @@
 """The ProSim <-> CARLA sensor loop, exercised with no simulator and no GPU.
 
-    python3 test_sensor_loop.py        (host python with numpy)
+    python3 tests/test_sensor_loop.py        (host python with numpy)
 
 What can go wrong in this loop goes wrong silently: a control applied after the
 tick instead of before it, an actor placed at the target pose on every substep
@@ -17,6 +17,13 @@ and a fake policy file loaded exactly the way a real policy.py is.
 
 from __future__ import annotations
 
+# Run from anywhere: the repo root goes on the import path and becomes the
+# working directory (tests read prosim_demo/..., demo_dataset/... relatively).
+import os as _os, sys as _sys
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))  # realpath: works via symlinks
+_sys.path.insert(0, _REPO)
+_os.chdir(_REPO)
+
 import json
 import math
 import sys
@@ -27,7 +34,6 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, "/scratch/veerk41/ProSim")
 import sensor_worker as W
 from ego_control import VehicleState
 from remote_ego import RemoteSensorEgoPolicy

@@ -8,9 +8,15 @@ against a throwaway data dir where every fallback file EXISTS -- a resolver
 that silently falls back would pass a test in a directory where the fallbacks
 are missing.
 """
+
+# Run from anywhere: the repo root goes on the import path and becomes the
+# working directory (tests read prosim_demo/..., demo_dataset/... relatively).
+import os as _os, sys as _sys
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))  # realpath: works via symlinks
+_sys.path.insert(0, _REPO)
+_os.chdir(_REPO)
 import sys, tempfile
 from pathlib import Path
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from carla_dataset import CarlaSceneSource as S
 
 P, F = [], []

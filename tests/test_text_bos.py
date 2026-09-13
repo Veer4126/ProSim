@@ -1,6 +1,6 @@
 """The BOS-strip fix in text_attns.LlamaTextAttn._get_llm_text_emd, without Llama weights.
 
-    python3 test_text_bos.py        (prosim_v4.sif; needs only the tokenizer files)
+    python3 tests/test_text_bos.py        (prosim_v4.sif; needs only the tokenizer files)
 
 Calls the REAL _config_tokenizer and _get_llm_text_emd on a stub whose only
 fake part is the embedding table: it returns the token ids as floats, so the
@@ -10,16 +10,22 @@ is replayed by applying its unconditional [:, 1:] to the same tokenizer output.
 Control: a tokenizer forced to prepend BOS. There the fix must strip exactly
 that token and produce the same ids as the BOS-free tokenizer.
 """
+
+# Run from anywhere: the repo root goes on the import path and becomes the
+# working directory (tests read prosim_demo/..., demo_dataset/... relatively).
+import os as _os, sys as _sys
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))  # realpath: works via symlinks
+_sys.path.insert(0, _REPO)
+_os.chdir(_REPO)
 import copy
 import sys
 
 import torch
 from transformers import AutoTokenizer
 
-sys.path.insert(0, "/scratch/veerk41/ProSim")
 from prosim.models.condition_transformer.text_attns import LlamaTextAttn
 
-TOK_DIR = "/scratch/veerk41/ProSim/Meta-Llama-3-8B-Instruct-HF"
+TOK_DIR = _os.path.join(_REPO, "Meta-Llama-3-8B-Instruct-HF")
 PASS, FAIL = [], []
 
 

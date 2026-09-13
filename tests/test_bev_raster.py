@@ -1,7 +1,7 @@
 """Is the offline BEV raster the one PlanT 2.0 expects?
 
     apptainer exec -B /scratch/veerk41:/workspace prosim_v4.sif \
-        bash -c "cd /workspace/ProSim && python3 test_bev_raster.py"
+        bash -c "cd /workspace/ProSim && python3 tests/test_bev_raster.py"
 
 The warp is transcribed from `chauffeurnet.py`, so checking it against itself
 would prove nothing. The decisive test projects OUR lane graph -- exported
@@ -19,6 +19,13 @@ Controls, because a high hit rate can be had for the wrong reasons:
 
 from __future__ import annotations
 
+# Run from anywhere: the repo root goes on the import path and becomes the
+# working directory (tests read prosim_demo/..., demo_dataset/... relatively).
+import os as _os, sys as _sys
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))  # realpath: works via symlinks
+_sys.path.insert(0, _REPO)
+_os.chdir(_REPO)
+
 import csv
 import json
 import math
@@ -27,7 +34,6 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, "/scratch/veerk41/ProSim")
 from bev_raster import (CLASS_LANE_ALL, CLASS_LANE_BROKEN, CLASS_ROAD,
                         CLASS_SIDEWALK, BevRasteriser, maps_dir_for)
 
