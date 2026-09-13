@@ -1,0 +1,25 @@
+{
+  "name": "prosim",
+  "schema_version": "1.0.0",
+  "scenario_families": [
+    "red_light",
+    "cut_in",
+    "lane_change",
+    "left_turn",
+    "right_turn",
+    "overtake"
+  ],
+  "policy_interfaces": [
+    "ego_policy_v1"
+  ],
+  "observation_spaces": [
+    "state",
+    "sensor"
+  ],
+  "action_spaces": [
+    "control",
+    "trajectory",
+    "waypoints"
+  ],
+  "closed_loop": true
+}
