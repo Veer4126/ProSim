@@ -45,7 +45,8 @@ class RemoteSensorEgoPolicy:
     def __init__(self, address: str, route, lane_graph=None, *,
                  policy_py: str, policy_request_path: str, town: str,
                  dt: float = 0.1, policy_hz: float = 20.0,
-                 frames_dir: Optional[str] = None, timeout_s: float = 300.0):
+                 frames_dir: Optional[str] = None, timeout_s: float = 300.0,
+                 ego_light: Optional[str] = None):
         self.address = address
         self.route = route
         self.lane_graph = lane_graph
@@ -56,6 +57,8 @@ class RemoteSensorEgoPolicy:
         self.policy_hz = float(policy_hz)
         self.frames_dir = frames_dir
         self.timeout_s = float(timeout_s)
+        #: The ego's junction phase for the worker to set and freeze, or None.
+        self.ego_light = ego_light
         self._client: Optional[Client] = None
         self._n_neighbors: Optional[int] = None
         self.init_reply: Dict[str, Any] = {}
@@ -81,6 +84,7 @@ class RemoteSensorEgoPolicy:
             "policy_py": self.policy_py,
             "policy_request": request,
             "frames_dir": self.frames_dir,
+            "ego_light": self.ego_light,
         })
 
     def step(self, state: VehicleState,

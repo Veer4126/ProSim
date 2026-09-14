@@ -337,6 +337,10 @@ def main():
     ap.add_argument("--ego-remote-town", default=None, metavar="TOWN",
                     help="map the worker's CARLA server must have loaded "
                          "(e.g. Town04, Town10HD_Opt)")
+    ap.add_argument("--ego-light", default=None, choices=["green", "yellow", "red"],
+                    help="with --ego-remote: set and freeze the traffic light "
+                         "governing the ego's approach (and its junction group) "
+                         "to this phase at episode start")
     ap.add_argument("--ego-frames-dir", default=None, metavar="DIR",
                     help="where the worker saves the camera strip the policy "
                          "saw, one JPEG per decision")
@@ -700,7 +704,7 @@ def main():
                     lane_graph=_lg, policy_py=args.ego_external,
                     policy_request_path=args.ego_policy_request,
                     town=args.ego_remote_town, dt=DT,
-                    frames_dir=args.ego_frames_dir)
+                    frames_dir=args.ego_frames_dir, ego_light=args.ego_light)
                 _remote_ego = _ext
             else:
                 _ext = make_external_ego(args.ego_external, _preq,
@@ -958,6 +962,7 @@ def main():
             "ego_external": args.ego_external,
             "ego_remote": args.ego_remote,
             "ego_remote_town": args.ego_remote_town,
+            "ego_light": args.ego_light,
             "ego_remote_session": (_remote_ego.metadata()
                                    if _remote_ego is not None else None),
             "ego_route_polyline": _ego_route_polyline,

@@ -420,6 +420,12 @@ def external_policy_py(policy_request: dict, harness_root) -> Path:
     return policy_py
 
 
+#: The ego's own junction phase for a sensor policy's CARLA world, frozen for the
+#: episode: green on the three signalised-junction families. An implementation's
+#: `ego_light` parameter overrides it. Families without a junction set nothing.
+FAMILY_EGO_LIGHT = {"red_light": "green", "left_turn": "green", "right_turn": "green"}
+
+
 def build_argv(request: dict, policy_request: dict, out_csv: Path,
                actor_ids: dict = None, harness_root=None,
                policy_request_path=None) -> tuple:
@@ -449,6 +455,7 @@ def build_argv(request: dict, policy_request: dict, out_csv: Path,
     argv += ["--data-dir", str(data_dir())]
     policy_py = None
     sensor_worker = None
+    ego_light = None
     if kind == "sensor":
         # The worker runs natively on the CARLA node, in the policy's own
         # environment; this process only talks to it. Never guessed: a default
@@ -469,6 +476,9 @@ def build_argv(request: dict, policy_request: dict, out_csv: Path,
                  "--ego-remote", sensor_worker,
                  "--ego-remote-town", world_town,
                  "--ego-frames-dir", str(Path(out_csv).parent / "ego_sensor_frames")]
+        ego_light = parameters.get("ego_light") or FAMILY_EGO_LIGHT.get(family)
+        if ego_light:
+            argv += ["--ego-light", str(ego_light)]
     elif kind == "external":
         policy_py = external_policy_py(policy_request, harness_root)
         argv += ["--ego-external", str(policy_py),
@@ -498,6 +508,7 @@ def build_argv(request: dict, policy_request: dict, out_csv: Path,
         "goals": [list(g) for g in goals],
         "ego_policy_kind": kind,
         "ego_sensor_worker": sensor_worker,
+        "ego_light": ego_light,
         "ego_policy_source": (str(policy_py) if policy_py is not None
                               else "native (ego_control.make_policy)"),
         "ego_v0_mps": v0,

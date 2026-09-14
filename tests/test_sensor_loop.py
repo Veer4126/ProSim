@@ -291,6 +291,25 @@ def main():
     absolute = W.resolve_request_paths({"checkpoint": "/abs/ckpt"}, fake_py)
     check("CONTROL: an absolute checkpoint is left alone",
           absolute["checkpoint"] == "/abs/ckpt")
+    # Path PARAMETERS (SimLingo's `weights`) are resolved against the harness
+    # root too, but only when the resolved file exists.
+    harness = Path(tempfile.mkdtemp())
+    (harness / "third_party/simlingo/scenario_orchestration").mkdir(parents=True)
+    real_py = harness / "third_party/simlingo/scenario_orchestration/policy.py"
+    real_py.write_text("")
+    (harness / "ckpts/sim").mkdir(parents=True)
+    (harness / "ckpts/sim/model.pt").write_text("x")
+    resolved = W.resolve_request_paths(
+        {"checkpoint": "ckpts/sim", "parameters": {"weights": "ckpts/sim/model.pt",
+                                                   "config_path": "ckpts/sim/missing.yaml",
+                                                   "device": "cuda:0"}}, real_py)
+    rp = resolved["parameters"]
+    check("an existing relative `weights` resolves against the harness root",
+          rp["weights"] == str(harness.resolve() / "ckpts/sim/model.pt"), rp["weights"])
+    check("CONTROL: a relative path parameter that does not exist is left alone",
+          rp["config_path"] == "ckpts/sim/missing.yaml", rp["config_path"])
+    check("CONTROL: non-path parameters are untouched",
+          rp["device"] == "cuda:0")
     try:
         W.to_control_fields({"waypoints": [[1, 0]]})
         check("CONTROL: an action with no control block is refused", False)
@@ -404,6 +423,88 @@ def main():
     ego.close()
     th.join(10)
     check("worker exits cleanly after the episode (--once)", not th.is_alive())
+
+    # ---------------------------------------------------------------- 4
+    banner("4. the ego's junction phase: osc2runner's real signals.apply")
+
+    class TLS:
+        Green, Yellow, Red = "Green", "Yellow", "Red"
+
+    sys.modules.setdefault("carla", types.SimpleNamespace(TrafficLightState=TLS))
+    events = []
+
+    class FakeLight:
+        def __init__(self, lid, approach_yaw):
+            self.id, self.yaw, self.state = lid, approach_yaw, None
+            self.group = [self]
+        def get_stop_waypoints(self):
+            return [types.SimpleNamespace(transform=Transform(rotation=Rotation(yaw=self.yaw)))]
+        def get_group_traffic_lights(self):
+            return self.group
+        def set_state(self, state):
+            self.state = state; events.append(("set_state", self.id, state))
+        def freeze(self, flag):
+            events.append(("freeze", self.id, flag))
+
+    ego_light, opposite = FakeLight(1, 0.0), FakeLight(2, 180.0)
+    cross_a, cross_b = FakeLight(3, 90.0), FakeLight(4, -90.0)
+    decoy = FakeLight(9, 90.0)                       # nearer, but faces across the ego's road
+    group = [ego_light, opposite, cross_a, cross_b]
+    for light in group:
+        light.group = group
+    marks = {10.0: decoy, 30.0: ego_light}
+
+    class SigWaypoint:
+        transform = Transform(rotation=Rotation(yaw=0.0))
+        def get_landmarks_of_type(self, dist, kind, stop_at_junction):
+            return [types.SimpleNamespace(distance=d) for d in sorted(marks)]
+    sig_map = types.SimpleNamespace(get_waypoint=lambda loc, project_to_road=True: SigWaypoint())
+    sig_world = types.SimpleNamespace(get_traffic_light=lambda mark: marks[mark.distance])
+    sig_actor = types.SimpleNamespace(get_location=lambda: Location(0.0, 0.0, 0.0))
+
+    signals = W.load_signals_module(W.DEFAULT_OSC2RUNNER)
+    note = signals.apply(sig_world, sig_map, sig_actor, "green")
+    states = {l.id: l.state for l in group}
+    check("the ego's light is the one FACING its approach, not the nearer decoy",
+          note.get("ego_light_id") == 1 and decoy.state is None, str(note.get("ego_light_id")))
+    check("ego and opposite approach green, crossing approaches red",
+          states == {1: "Green", 2: "Green", 3: "Red", 4: "Red"}, str(states))
+    set_idx = [i for i, e in enumerate(events) if e[0] == "set_state"]
+    freeze_idx = [i for i, e in enumerate(events) if e[0] == "freeze"]
+    check("frozen once, after every state was set",
+          note.get("frozen") is True and len(freeze_idx) == 1 and freeze_idx[0] > max(set_idx),
+          f"events {events}")
+    events.clear()
+    for light in group:
+        light.state = None
+    none_note = signals.apply(sig_world, sig_map, sig_actor, None)
+    check("CONTROL: no declared phase touches nothing",
+          not events and none_note.get("requested") is None, str(none_note))
+
+    calls = []
+
+    class RecordingSignals:
+        def apply(self, world, carla_map, actor, phase):
+            calls.append((actor, phase, world.frame))
+            return {"requested": phase, "applied": phase, "ego_light_id": 1, "frozen": True}
+
+    for light_msg, expect_call in (("green", True), (None, False)):
+        world = FakeWorld("Town10HD_Opt")
+        s2 = W.Session(make_fake_carla(world), fake_rig_mod, "127.0.0.1", 2000)
+        s2.signals = RecordingSignals()
+        calls.clear()
+        msg = dict(init, town="Town10HD_Opt", ego_light=light_msg)
+        reply2 = s2.init(msg)
+        ticks_after = sum(1 for e in world.log if e[0] == "tick" and calls and e[1] > calls[0][2])
+        if expect_call:
+            check("Session.init applies the declared phase to the spawned EGO, then ticks",
+                  len(calls) == 1 and calls[0][0] is s2.ego and calls[0][1] == "green"
+                  and ticks_after >= 1 and reply2["ego_light"]["applied"] == "green",
+                  f"calls {[(c[1]) for c in calls]}, ticks after {ticks_after}, reply {reply2['ego_light']}")
+        else:
+            check("CONTROL: no ego_light in the init message -> signals.apply is never called",
+                  not calls and reply2["ego_light"]["requested"] is None, str(reply2["ego_light"]))
+        s2.close()
 
     print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
     if FAIL:

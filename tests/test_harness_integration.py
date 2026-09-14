@@ -390,6 +390,22 @@ def main():
     check("no BEV and no native ego flags on the sensor path",
           "--ego-bev-town" not in argv_s and "--ego-policy" not in argv_s
           and "--ego-v0" not in argv_s, str(argv_s))
+    check("a junction family freezes the ego's light green (left_turn)",
+          flag(argv_s, "--ego-light") == "green" and d_s["ego_light"] == "green",
+          str(flag(argv_s, "--ego-light")))
+    check("CONTROL: a highway family declares no phase (cut_in)",
+          "--ego-light" not in argv_hw, str(flag(argv_hw, "--ego-light")))
+    os.environ["PROSIM_SENSOR_WORKER"] = "127.0.0.1:2100"
+    try:
+        scen_red = json.loads(json.dumps(scen_s))
+        scen_red["implementation"]["parameters"]["ego_light"] = "red"
+        argv_red, _ = run_mod.build_argv(scen_red, tfv6_req, Path("/tmp/x/rollout.csv"),
+                                         harness_root=HARNESS,
+                                         policy_request_path="/tmp/policy.json")
+    finally:
+        os.environ.pop("PROSIM_SENSOR_WORKER", None)
+    check("an implementation's ego_light parameter overrides the family default",
+          flag(argv_red, "--ego-light") == "red", str(flag(argv_red, "--ego-light")))
     kind_ext, _, kw_ext, un_ext = run_mod.resolve_ego_policy(
         {"name": "idm_mobil", "implementation": "idm.policy.IDMMobilPolicy",
          "parameters": {"desired_speed_mps": 14.0, "lane_width_m": 3.5}})

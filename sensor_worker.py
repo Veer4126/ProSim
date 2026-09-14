@@ -88,6 +88,23 @@ def load_rig_module(osc2runner: str):
     return mods["sensors"]
 
 
+#: Request parameters that name a file relative to the harness root.
+PATH_PARAMETERS = ("weights", "checkpoint", "config", "config_path", "model_path", "weights_path")
+
+
+def load_signals_module(osc2runner: str):
+    """osc2runner's `osc2carla/backend/signals.py`, by path. It imports nothing
+    at module level beyond `typing` (and `carla` only inside `apply`), so it
+    loads standalone. Reused rather than re-implemented so the ego's junction
+    phase is set exactly the way the OSC2 arm sets it."""
+    path = Path(osc2runner) / "osc2carla" / "backend" / "signals.py"
+    spec = importlib.util.spec_from_file_location("_osc2_signals", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["_osc2_signals"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def same_town(loaded: str, wanted: str) -> bool:
     """'Carla/Maps/Town10HD_Opt' is Town10HD: the layered build has the same
     roads, and the harness names it either way."""
@@ -98,14 +115,26 @@ def same_town(loaded: str, wanted: str) -> bool:
 
 
 def resolve_request_paths(request: Dict[str, Any], policy_py: Path) -> Dict[str, Any]:
-    """The harness writes `checkpoint` relative to ITS root
-    (`third_party/checkpoints/...`), and this worker's cwd is anywhere. The
-    policy lives at <root>/third_party/<repo>/scenario_orchestration/policy.py,
-    so the root is three directories above its folder."""
+    """The harness writes `checkpoint` (and conventional path parameters such as
+    SimLingo's `weights`) relative to ITS root (`third_party/checkpoints/...`),
+    and this worker's cwd is anywhere. The policy lives at
+    <root>/third_party/<repo>/scenario_orchestration/policy.py, so the root is
+    three directories above its folder. `checkpoint` is always resolved; the
+    parameters only when the resolved path exists, so an unrelated string that
+    merely looks relative is left alone."""
     request = dict(request)
+    root = Path(policy_py).resolve().parents[3]
     checkpoint = request.get("checkpoint")
     if checkpoint and not Path(checkpoint).is_absolute():
-        request["checkpoint"] = str(Path(policy_py).resolve().parents[3] / checkpoint)
+        request["checkpoint"] = str(root / checkpoint)
+    parameters = dict(request.get("parameters") or {})
+    for key in PATH_PARAMETERS:
+        value = parameters.get(key)
+        if isinstance(value, str) and value and not Path(value).is_absolute() \
+                and (root / value).exists():
+            parameters[key] = str(root / value)
+    if parameters:
+        request["parameters"] = parameters
     return request
 
 
@@ -266,13 +295,33 @@ class Session:
         if self.rig.active:
             self.rig.capture(frame)
 
+        # The ego's junction phase, before the policy's first decision: the
+        # light governing the ego's approach (and its group) is set and frozen
+        # by osc2runner's own signals.apply. No declared phase leaves CARLA's
+        # cycle alone.
+        declared = msg.get("ego_light")
+        signals = getattr(self, "signals", None)
+        if declared and signals is not None:
+            self.signal_note = signals.apply(self.world, self.world.get_map(),
+                                             self.ego, declared)
+            frame = self.world.tick()
+            if self.rig.active:
+                self.rig.capture(frame)
+        elif declared:
+            self.signal_note = {"requested": declared, "applied": None,
+                                "note": "this worker has no signals module"}
+        else:
+            self.signal_note = {"requested": None,
+                                "note": "no phase declared; CARLA's own cycle applies"}
+
         if msg.get("frames_dir"):
             self.frames_dir = Path(msg["frames_dir"])
             self.frames_dir.mkdir(parents=True, exist_ok=True)
         return {"ok": True, "map": self.world.get_map().name,
                 "tick_hz": policy_hz, "substeps": self.substeps,
                 "sensors": self.rig.names, "failed": self.rig.failed,
-                "sensor_hz": self.rig.sensor_hz}
+                "sensor_hz": self.rig.sensor_hz,
+                "ego_light": getattr(self, "signal_note", None)}
 
     def _forward_velocity(self, pose: Dict[str, float]):
         return self.carla.Vector3D(x=pose["speed"] * math.cos(pose["yaw_rad"]),
@@ -344,6 +393,13 @@ class Session:
         summary = {"ok": True, "decisions": self.decisions,
                    "dropped": dict(self.rig.dropped) if self.rig else {}}
         try:
+            if (getattr(self, "signal_note", None) or {}).get("frozen"):
+                try:
+                    for light in self.world.get_actors().filter("traffic.traffic_light"):
+                        light.freeze(False)
+                        break                       # freeze(False) is scene-wide
+                except Exception:
+                    pass
             if self.rig is not None:
                 self.rig.destroy()
             for actor in self.actors + ([self.ego] if self.ego else []):
@@ -364,13 +420,15 @@ class Session:
 # server
 # --------------------------------------------------------------------------
 
-def serve(args, carla_mod=None, rig_mod=None, on_ready=None) -> int:
+def serve(args, carla_mod=None, rig_mod=None, on_ready=None, signals_mod=None) -> int:
     """Serve episodes. `carla_mod` / `rig_mod` / `on_ready(port)` exist so the
     whole loop can be exercised against fakes, with no server and no GPU."""
     if carla_mod is None:
         import carla as carla_mod  # fail here, not on the first request
     if rig_mod is None:
         rig_mod = load_rig_module(args.osc2runner)
+        if signals_mod is None:
+            signals_mod = load_signals_module(args.osc2runner)
     srv = socket.create_server((args.host, args.port))
     port = srv.getsockname()[1]
     print(f"sensor worker listening on {args.host}:{port} "
@@ -383,6 +441,7 @@ def serve(args, carla_mod=None, rig_mod=None, on_ready=None) -> int:
         stream = conn.makefile("rwb")
         session = Session(carla_mod, rig_mod, args.carla_host, args.carla_port,
                           allow_load_town=args.allow_load_town)
+        session.signals = signals_mod
         try:
             while True:
                 try:
