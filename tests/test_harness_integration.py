@@ -644,14 +644,41 @@ def main():
         except SystemExit as exc:
             check(f"CONTROL: refuses {label}", True, str(exc)[:70])
     a_lc, sp_lc = build_requests(family="lane_change")
-    argv, d = run_mod.build_argv(a_lc.build_scenario_request(sp_lc).to_dict(),
+    lc_request = a_lc.build_scenario_request(sp_lc).to_dict()
+    lc_ids = {0: 154, 1: 155, 2: 156}
+    argv, d = run_mod.build_argv(lc_request,
                                  a_lc.build_policy_request(sp_lc).to_dict(),
                                  Path("/tmp/x.csv"),
-                                 actor_ids={0: 154, 1: 155, 2: 156}, harness_root=HARNESS, policy_request_path='/tmp/policy.json')
+                                 actor_ids=lc_ids, harness_root=HARNESS, policy_request_path='/tmp/policy.json')
     gid = [argv[i + 1:i + 4] for i, a in enumerate(argv) if a == "--goal-id"]
+    # Expected from the shipped implementation's own goals, so tuning a goal in
+    # implementations.yaml does not read as a regression here.
+    want = [[str(lc_ids[int(g["agent"])]), f"{float(g['xy'][0]):g}", f"{float(g['xy'][1]):g}"]
+            for g in lc_request["implementation"]["parameters"]["goals"]]
     check("argv carries --goal-id with actor ids, and no bare --goal",
-          gid == [["155", "-240", "30"], ["156", "-100", "35"]]
-          and "--goal" not in argv, str(gid))
+          gid == want and len(want) == 2 and "--goal" not in argv, f"{gid} vs declared {want}")
+    lc_policy = a_lc.build_policy_request(sp_lc).to_dict()
+    saved_worker = os.environ.get("PROSIM_SENSOR_WORKER")
+    os.environ["PROSIM_SENSOR_WORKER"] = "127.0.0.1:2100"
+    try:
+        argv_c, d_c = run_mod.build_argv(dict(lc_request, algorithm="prosim_carla"), lc_policy,
+                                         Path("/tmp/x.csv"), actor_ids=lc_ids, harness_root=HARNESS,
+                                         policy_request_path='/tmp/policy.json')
+        argv_p, d_p = run_mod.build_argv(dict(lc_request, algorithm="prosim"), lc_policy,
+                                         Path("/tmp/x.csv"), actor_ids=lc_ids, harness_root=HARNESS,
+                                         policy_request_path='/tmp/policy.json')
+    finally:
+        if saved_worker is None:
+            os.environ.pop("PROSIM_SENSOR_WORKER", None)
+        else:
+            os.environ["PROSIM_SENSOR_WORKER"] = saved_worker
+    check("on prosim_carla a state policy drives inside CARLA through the worker",
+          d_c["ego_policy_kind"] == "carla_state" and "--ego-remote" in argv_c
+          and lc_policy.get("observation_space") == "state",
+          f"{d_c['ego_policy_kind']}, --ego-remote {'--ego-remote' in argv_c}")
+    check("CONTROL: on the plain prosim arm the same policy keeps the no-CARLA bridge",
+          d_p["ego_policy_kind"] == "external" and "--ego-remote" not in argv_p,
+          f"{d_p['ego_policy_kind']}, --ego-remote {'--ego-remote' in argv_p}")
     check("the mapping is recorded in method_metrics",
           d["goal_assignment"] == "recorded actor id"
           and d["agent_actor_ids"] == {"0": 154, "1": 155, "2": 156})

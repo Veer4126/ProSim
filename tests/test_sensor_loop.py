@@ -77,8 +77,10 @@ class Vector3D:
 
 
 class VehicleControl:
-    def __init__(self, throttle=0.0, steer=0.0, brake=0.0, hand_brake=False, reverse=False):
+    def __init__(self, throttle=0.0, steer=0.0, brake=0.0, hand_brake=False, reverse=False,
+                 manual_gear_shift=False, gear=0):
         self.throttle, self.steer, self.brake = throttle, steer, brake
+        self.manual_gear_shift, self.gear = manual_gear_shift, gear
 
 
 class Settings:
@@ -104,6 +106,9 @@ class FakeActor:
 
     def set_target_velocity(self, v):
         self.v = v
+
+    def set_target_angular_velocity(self, w):
+        self.w = w
 
     def apply_control(self, control):
         self.control = control
@@ -153,7 +158,14 @@ class FakeWorld:
         moves if a control reached it before the tick."""
         dt = self.settings.fixed_delta_seconds or 0.05
         for a in self.actors:
-            if not a.physics or a.control is None:
+            if not a.physics:
+                continue
+            if a.control is None:
+                # A physics body with no pedals coasts on its target velocity for
+                # the tick, as CARLA carries a placed agent.
+                a.tf = Transform(Location(a.tf.location.x + a.v.x * dt,
+                                          a.tf.location.y + a.v.y * dt, a.tf.location.z),
+                                 a.tf.rotation)
                 continue
             yaw = math.radians(a.tf.rotation.yaw)
             speed = math.hypot(a.v.x, a.v.y) + (4.0 * a.control.throttle - 8.0 * a.control.brake) * dt
@@ -260,20 +272,38 @@ def main():
     check("heading interpolates along the SHORT arc across +-180 deg",
           abs(abs(math.degrees(mid["yaw_rad"])) - 180.0) < 1e-6,
           f"{math.degrees(mid['yaw_rad']):+.1f} deg (a naive lerp gives 0)")
+    RM = W.load_route_module(W.DEFAULT_OSC2RUNNER)
+    def route_of(points, yaw=0.0):     # a fresh plan each: progress is stateful
+        return W.route_in_ego_frame(W.plan_from_route_world(RM, np.asarray(points, float)),
+                                    0.0, 0.0, yaw)
     route = np.stack([np.arange(0, 60.0, 0.5), np.zeros(120)], axis=1)
-    r = W.route_in_ego_frame(route, 0.0, 0.0, 0.0)
+    r = route_of(route)
     check("route: 20 points, first 2.5 m ahead, 1 m apart",
           len(r) == 20 and abs(r[0][0] - 2.5) < 1e-9 and abs(r[1][0] - r[0][0] - 1.0) < 1e-9,
           f"{len(r)} pts, first {np.round(r[0], 3).tolist()}")
-    r_side = W.route_in_ego_frame(np.array([[0, 0], [5, 3], [10, 6]], float), 0.0, 0.0, 0.0)
-    r_mirror = W.route_in_ego_frame(np.array([[0, 0], [5, -3], [10, -6]], float), 0.0, 0.0, 0.0)
+    r_side = route_of([[0, 0], [5, 3], [10, 6]])
+    r_mirror = route_of([[0, 0], [5, -3], [10, -6]])
     check("a route bending toward world +y has POSITIVE lateral (the right)",
           r_side[-1][1] > 0 and r_mirror[-1][1] < 0,
           f"+y -> {r_side[-1][1]:+.2f}, control -y -> {r_mirror[-1][1]:+.2f}")
-    r_turned = W.route_in_ego_frame(np.stack([np.zeros(60), np.arange(60.0)], axis=1),
-                                    0.0, 0.0, math.pi / 2)
+    r_turned = route_of(np.stack([np.zeros(60), np.arange(60.0)], axis=1), math.pi / 2)
     check("with the ego facing world +y, that route is straight ahead",
           abs(r_turned[5][1]) < 1e-9 and r_turned[5][0] > 0, str(np.round(r_turned[5], 3).tolist()))
+    mag = np.zeros((8, 8, 3), np.uint8); mag[..., 0] = 255; mag[..., 2] = 255
+    tree = np.zeros((8, 8, 3), np.uint8); tree[..., 1] = 160
+    check("magenta_fraction: magenta image 1.0; black, green and a lidar array 0",
+          W.magenta_fraction(mag) == 1.0 and W.magenta_fraction(np.zeros((8, 8, 3), np.uint8)) == 0.0
+          and W.magenta_fraction(tree) == 0.0 and W.magenta_fraction(np.zeros((50, 4))) == 0.0)
+    try:
+        import cv2
+        real = {n: W.magenta_fraction(cv2.imread(f"tests/fixtures/frame_{n}.jpg")[..., ::-1])
+                for n in ("pink_simlingo", "clean_simlingo", "clean_tfv6")}
+        check("real frames: the broken SimLingo frame is over the limit, clean ones far under",
+              real["pink_simlingo"] > W.PINK_FRACTION
+              and max(real["clean_simlingo"], real["clean_tfv6"]) < W.PINK_FRACTION / 3,
+              str({k: round(v, 3) for k, v in real.items()}))
+    except ImportError:
+        print("  (cv2 not installed: real-frame magenta check skipped)")
     c = W.to_control_fields({"control": {"throttle": 1.7, "steer": -3.0, "brake": -1}})
     check("controls are clamped to CARLA's ranges",
           c == {"throttle": 1.0, "brake": 0.0, "steer": -1.0}, str(c))
@@ -341,8 +371,8 @@ def main():
     check("world set synchronous at the policy's 20 Hz, 2 ticks per ProSim step",
           world.settings.synchronous_mode and abs(world.settings.fixed_delta_seconds - 0.05) < 1e-12
           and reply["substeps"] == 2, str(reply))
-    check("ego spawned WITH physics as the MKZ, agents WITHOUT",
-          s.ego.physics and s.ego.bp_id == W.EGO_BLUEPRINT and not s.actors[0].physics)
+    check("ego AND agents spawned with physics on (so CARLA knows the agents' speed)",
+          s.ego.physics and s.ego.bp_id == W.EGO_BLUEPRINT and s.actors[0].physics)
     check("the policy's own sensors() became the rig", reply["sensors"] == ["PCAM_F0"])
 
     world.log.clear()
@@ -355,8 +385,8 @@ def main():
     check("the policy decides once per tick: 2 decisions for one ProSim step",
           len(policy_mod.SEEN) - n_before == 2, f"{len(policy_mod.SEEN) - n_before}")
     placed = [e for e in world.log if e[0] == "set_transform"]
-    check("the agent is placed on the INTERPOLATED pose, then the target",
-          len(placed) == 2 and abs(placed[0][2] - 20.5) < 1e-9 and abs(placed[1][2] - 21.0) < 1e-9,
+    check("the agent is placed at each tick's START pose (the previous target, then halfway)",
+          len(placed) == 2 and abs(placed[0][2] - 20.0) < 1e-9 and abs(placed[1][2] - 20.5) < 1e-9,
           f"x = {[round(p[2], 3) for p in placed]}")
     ticks = [e[1] for e in world.log if e[0] == "tick"]
     caps = [e[1] for e in world.log if e[0] == "capture"]
@@ -375,11 +405,116 @@ def main():
           f"ego x {out['ego']['x']:.4f}")
     check("clamped control reaches the car (throttle 1.7 -> 1.0)",
           abs(out["control"]["throttle"] - 1.0) < 1e-9)
+    a0 = s.actors[0]
+    check("each placed agent gets ProSim's speed as target velocity, no spin, 5 cm lift",
+          abs(math.hypot(a0.v.x, a0.v.y) - 5.0) < 1e-9 and (a0.w.x, a0.w.y, a0.w.z) == (0.0, 0.0, 0.0)
+          and abs(a0.tf.location.z - (0.2 + W.ACTOR_Z_OFFSET)) < 1e-9,
+          f"speed {math.hypot(a0.v.x, a0.v.y):.2f}, z {a0.tf.location.z:.3f}")
+    check("the step reply carries the guard numbers", set(out.get("checks", {})) ==
+          {"actor_speed_err_max_mps", "magenta_max"}, str(out.get("checks")))
+
+    logged = W.Session(make_fake_carla(FakeWorld("Town04")), fake_rig_mod, "127.0.0.1", 2000)
+    run_dir = Path(tempfile.mkdtemp())
+    logged.init(dict(init, frames_dir=str(run_dir / "ego_sensor_frames")))
+    logged.step(step)
+    logged.close()
+    lines = [json.loads(l) for l in (run_dir / "ego_policy_log.jsonl").read_text().splitlines()]
+    check("the per-decision log has one line per decision (2 for one ProSim step)",
+          len(lines) == 2 and [l["decision"] for l in lines] == [0, 1], f"{len(lines)} lines")
+    na = lines[-1]["nearest_agent"] if lines else None
+    check("it names the nearest other car in the ego frame (where the world has it, 5 m/s)",
+          na is not None and abs(na["forward_m"] - (logged.actors[0].tf.location.x - lines[-1]["ego"]["x"])) < 0.05
+          and abs(na["speed_mps"] - 5.0) < 1e-6, str(na))
+
+    # ---------------------------------------------------------------- 2c
+    banner("2c. timing: at every capture the car is where ProSim has it at that instant")
+
+    def captured_x(targets):
+        """The car's x at each capture, driving it 1 m per 0.1 s step at 10 m/s."""
+        sess = W.Session(make_fake_carla(FakeWorld("Town04")), fake_rig_mod, "127.0.0.1", 2000)
+        sess.init(dict(init, actors=[{"x": 20.0, "y": 0.0, "yaw_rad": 0.0, "speed": 10.0,
+                                      "length": 4.5, "width": 2.0}]))
+        seen, original = [], sess.rig.capture
+
+        def capture(frame=None):
+            seen.append(round(sess.actors[0].get_transform().location.x, 6))
+            return original(frame)
+        sess.rig.capture = capture
+        for x in targets:
+            sess.step({"op": "step", "actors": [{"x": x, "y": 0.0, "yaw_rad": 0.0, "speed": 10.0,
+                                                 "length": 4.5, "width": 2.0}]})
+        sess.close()
+        return seen
+
+    got = captured_x([21.0, 22.0, 23.0])                 # end-of-step poses, what prosim_ego now hands over
+    check("with end-of-step targets, each capture sees the car at ProSim's pose for that tick",
+          np.allclose(got, [20.5, 21.0, 21.5, 22.0, 22.5, 23.0], atol=1e-6), str(got))
+    late = captured_x([20.0, 21.0, 22.0])                # start-of-step poses, the old handoff
+    # Its first step targets the spawn pose itself, so the gap only settles from
+    # the second step's captures on.
+    check("CONTROL: start-of-step targets (the old handoff) put the car a whole step (1 m) behind",
+          np.allclose(np.array(got[2:]) - np.array(late[2:]), 1.0, atol=1e-6), f"old handoff {late}")
+    check("and the policy's own report of the decision (its command, and a meta block)",
+          lines and lines[-1].get("command") == "LANEFOLLOW" and isinstance(lines[-1].get("meta"), dict),
+          f"command {lines[-1].get('command') if lines else None}, meta {lines[-1].get('meta') if lines else None}")
+    check("and what was applied: route size, action, pedals",
+          lines and lines[-1]["route"]["points"] == 20 and "control" in lines[-1]["action"]
+          and lines[-1]["control"]["throttle"] == 1.0, str(lines[-1] if lines else None)[:200])
 
     summary = s.close()
     check("close destroys ego and agents and restores the world's settings",
           s.ego.destroyed and all(a.destroyed for a in s.actors)
           and not world.settings.synchronous_mode and s.rig.destroyed, str(summary))
+
+    # ---------------------------------------------------------------- 2b
+    banner("2b. the guards: a moving car's speed, and broken rendering")
+
+    class StuckActor(FakeActor):
+        def get_velocity(self):          # what CARLA reports for a physics-off car
+            return Vector3D()
+
+    class StuckWorld(FakeWorld):
+        def try_spawn_actor(self, bp_id, tf):
+            actor = (StuckActor if bp_id == W.ACTOR_BLUEPRINT else FakeActor)(self, bp_id, tf)
+            self.actors.append(actor)
+            return actor
+
+    class PinkRig(FakeRig):
+        def capture(self, frame=None):
+            super().capture(frame)
+            img = np.zeros((16, 16, 3), dtype=np.uint8)
+            img[..., 0] = 255
+            img[..., 2] = 255
+            return {sp["name"]: img for sp in self.specs}
+
+    pink_rig_mod = types.SimpleNamespace(SensorRig=PinkRig, specs_from=lambda d: list(d))
+
+    def drive(world, rig_mod, n_steps):
+        """Step until the worker stops the episode: (decisions made, error or None, session)."""
+        sess = W.Session(make_fake_carla(world), rig_mod, "127.0.0.1", 2000)
+        sess.init(dict(init))
+        try:
+            for k in range(n_steps):
+                sess.step({"op": "step", "actors": [{"x": 21.0 + k, "y": 0.0, "yaw_rad": 0.0,
+                                                     "speed": 5.0, "length": 4.5, "width": 2.0}]})
+        except RuntimeError as exc:
+            return sess.decisions, str(exc), sess
+        return sess.decisions, None, sess
+
+    n, err, good = drive(FakeWorld("Town04"), fake_rig_mod, 15)
+    check("a normal episode runs 30 decisions with neither guard firing",
+          err is None and n == 30, f"{n} decisions, error {err}")
+    check("and its checks show the agent's reported speed matching ProSim's",
+          good.checks["actor_speed_err_max_mps"] < 1e-9 and good.checks["magenta_max"] == 0.0,
+          str(good.checks))
+    n, err, _ = drive(StuckWorld("Town04"), fake_rig_mod, 15)
+    check("CONTROL: an agent reported at 0 m/s while moving stops the episode on tick 20",
+          err is not None and "reports its speed" in err and n == W.STOPPED_TICKS - 1,
+          f"{n} decisions before stopping: {(err or '')[:60]}")
+    n, err, _ = drive(FakeWorld("Town04"), pink_rig_mod, 15)
+    check("CONTROL: magenta camera frames stop the episode on decision 10",
+          err is not None and "magenta" in err and n == W.PINK_TICKS - 1,
+          f"{n} decisions before stopping: {(err or '')[:60]}")
 
     # ---------------------------------------------------------------- 3
     banner("3. the real socket: RemoteSensorEgoPolicy <-> serve()")
@@ -415,6 +550,9 @@ def main():
           ego.last_reply.get("decisions") == 6, str(ego.last_reply.get("decisions")))
     check("init told ProSim which sensors actually attached",
           ego.init_reply.get("sensors") == ["PCAM_F0"])
+    log = ego.metadata().get("light_log") or []
+    check("the light readout of init and every step reaches ProSim's metadata, in step order",
+          [e.get("step") for e in log] == [0, 1, 2, 3], str([e.get("step") for e in log]))
     try:
         ego.step(st, nb + nb)
         check("CONTROL: a scene that changes size mid-rollout is refused", False)
@@ -445,6 +583,8 @@ def main():
             self.state = state; events.append(("set_state", self.id, state))
         def freeze(self, flag):
             events.append(("freeze", self.id, flag))
+        def get_state(self):
+            return self.state
 
     ego_light, opposite = FakeLight(1, 0.0), FakeLight(2, 180.0)
     cross_a, cross_b = FakeLight(3, 90.0), FakeLight(4, -90.0)
@@ -505,6 +645,40 @@ def main():
             check("CONTROL: no ego_light in the init message -> signals.apply is never called",
                   not calls and reply2["ego_light"]["requested"] is None, str(reply2["ego_light"]))
         s2.close()
+
+    class JunctionSignals(RecordingSignals):
+        def junction_lights(self, world, carla_map, actor):
+            return [(ego_light, "ego"), (opposite, "opposing"),
+                    (cross_a, "crossing"), (cross_b, "crossing")]
+
+    for light, state in zip(group, ("Green", "Green", "Red", "Red")):
+        light.state = state
+    one_agent = {"op": "step", "actors": [{"x": 21.0, "y": 0.0, "yaw_rad": 0.0, "speed": 5.0,
+                                           "length": 4.5, "width": 2.0}]}
+    s3 = W.Session(make_fake_carla(FakeWorld("Town10HD_Opt")), fake_rig_mod, "127.0.0.1", 2000)
+    s3.signals = JunctionSignals()
+    reply3 = s3.init(dict(init, town="Town10HD_Opt", ego_light="green"))
+    check("init names each junction light's role for the trace",
+          reply3.get("signal_roles") == {"1": "ego", "2": "opposing", "3": "crossing", "4": "crossing"},
+          str(reply3.get("signal_roles")))
+    out3 = s3.step(one_agent)
+    check("each step reads the lights back: ego and opposing green, crossing red",
+          out3.get("lights") == {"ego": ["Green"], "opposing": ["Green"], "crossing": ["Red", "Red"],
+                                 "lights": {"1": "Green", "2": "Green", "3": "Red", "4": "Red"}},
+          str(out3.get("lights")))
+    ego_light.state = "Red"
+    out4 = s3.step(one_agent)
+    check("a light that changes is read as changed, not cached from init",
+          out4["lights"]["ego"] == ["Red"] and out4["lights"]["lights"]["1"] == "Red",
+          str(out4["lights"]))
+    s3.close()
+    s4 = W.Session(make_fake_carla(FakeWorld("Town10HD_Opt")), fake_rig_mod, "127.0.0.1", 2000)
+    s4.signals = RecordingSignals()
+    reply4 = s4.init(dict(init, town="Town10HD_Opt", ego_light="green"))
+    check("CONTROL: a signals module without junction_lights reports no lights at all",
+          reply4.get("signal_roles") == {} and reply4["lights"]["ego"] == []
+          and s4.step(one_agent)["lights"]["lights"] == {}, str(reply4.get("lights")))
+    s4.close()
 
     print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
     if FAIL:

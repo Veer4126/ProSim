@@ -188,6 +188,65 @@ def main():
           obs["route"] and obs["route"][0][0] > 0.0,
           f"first route point {obs['route'][0] if obs['route'] else None}")
 
+    banner("4b. route progress: an over-rotated ego is not sent back down its approach")
+    # East 40 m, a left turn (CARLA: toward -y) of radius 10, then south.
+    arc = np.linspace(math.pi / 2, 0.0, 32)
+    L_PLAN = np.concatenate([
+        np.stack([np.arange(0.0, 40.0, 0.5), np.zeros(80)], axis=1),
+        np.stack([40.0 + 10.0 * np.cos(arc), -10.0 + 10.0 * np.sin(arc)], axis=1),
+        np.stack([np.full(100, 50.0), -10.0 - 0.5 * np.arange(1, 101)], axis=1)])
+
+    class LRoute:
+        current_lane_id = None
+        def path_ahead(self, state, distance):
+            return L_PLAN
+
+    def world_first(obs_route, st):
+        c, s = math.cos(st.heading), math.sin(st.heading)
+        fx, fy = obs_route[0]
+        return st.x + fx * c - fy * s, st.y + fx * s + fy * c
+
+    def old_first_idx(st):
+        loc = ExternalEgoPolicy._to_ego(L_PLAN, st)
+        idx = np.flatnonzero(loc[:, 0] > 0.0)
+        return int(idx[0]) if len(idx) else None
+
+    lt = ExternalEgoPolicy(type("W", (), {"action_space": "waypoints"})(), LRoute(), dt=0.1)
+    for x in np.arange(0.0, 44.0, 1.0):                 # drive the approach
+        lt._observation(VehicleState(x=float(x), y=0.0, heading=0.0, speed=8.0), [])
+    over = VehicleState(x=48.0, y=-6.0, heading=math.radians(-106.0), speed=8.0)
+    obs = lt._observation(over, [])
+    wx, wy = world_first(obs["route"], over)
+    check("over-rotated at the junction exit: the route continues SOUTH",
+          wy < -5.0 and abs(wx - 50.0) < 6.0, f"first route point world ({wx:.1f}, {wy:.1f})")
+    check("CONTROL: the old 'in front of the car' filter picked the approach start",
+          old_first_idx(over) == 0, f"old first index {old_first_idx(over)}")
+    idx_before = lt._progress_idx
+    lt._observation(VehicleState(x=10.0, y=0.0, heading=0.0, speed=8.0), [])
+    check("progress never moves backwards", lt._progress_idx >= idx_before,
+          f"{idx_before} -> {lt._progress_idx}")
+
+    thru = ExternalEgoPolicy(type("W", (), {"action_space": "waypoints"})(), LRoute(), dt=0.1)
+    for x in np.arange(0.0, 71.0, 1.0):                 # straight through the turn
+        st_thru = VehicleState(x=float(x), y=0.0, heading=0.0, speed=8.0)
+        obs = thru._observation(st_thru, [])
+    check("straight through the junction: the route is not empty",
+          len(obs["route"]) == 20, f"{len(obs['route'])} points")
+    check("CONTROL: the old filter left nothing in front",
+          old_first_idx(st_thru) is None, f"old first index {old_first_idx(st_thru)}")
+    from external_ego import _resample
+    sr = ExternalEgoPolicy(type("W", (), {"action_space": "waypoints"})(),
+                           StraightRoute(0.0, 0.0, 0.0), dt=0.1)
+    worst = 0.0
+    for x in np.arange(0.0, 30.0, 0.7):                 # 0.3 m off the line
+        st_sr = VehicleState(x=float(x), y=0.3, heading=0.0, speed=8.0)
+        obs = sr._observation(st_sr, [])
+        loc = ExternalEgoPolicy._to_ego(sr._plan, st_sr)
+        old = _resample(loc[loc[:, 0] > 0.0], 2.5, 1.0, 20)
+        worst = max(worst, float(np.abs(np.asarray(obs["route"]) - old).max()))
+    check("CONTROL: in normal driving the route is exactly the old filter's",
+          worst < 1e-9, f"max |new - old| {worst:.2e} m over 43 offset poses")
+
     # ---------------------------------------------------------------- 5
     banner("5. waypoint policies (PlanT 2.0's surface)")
 

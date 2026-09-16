@@ -90,6 +90,9 @@ def main():
           missing[:, :, :384].max() == 0 and missing[:, :, 384:768].max() == 255)
 
     print("\n=== 2. route -> command, from the worker's own route_in_ego_frame ===")
+    RM = W.load_route_module(W.DEFAULT_OSC2RUNNER)
+    def route_of(points):              # a fresh plan each: progress is stateful
+        return W.route_in_ego_frame(W.plan_from_route_world(RM, points), 0.0, 0.0, 0.0)
     s = np.arange(0.0, 60.0, 0.5)
     straight = np.stack([s, np.zeros_like(s)], axis=1)
     r = 15.0
@@ -99,7 +102,7 @@ def main():
     bend_neg_y = bend_pos_y * np.array([1.0, -1.0])
     cmd = {}
     for name, route in (("straight", straight), ("+y", bend_pos_y), ("-y", bend_neg_y)):
-        obs_route = W.route_in_ego_frame(route, 0.0, 0.0, 0.0)
+        obs_route = route_of(route)
         _, target, _, commands = pol._navigation({"route": obs_route})
         cmd[name] = commands[1]
     # CARLA is left-handed: world +y is the driver's RIGHT (measured 2026-09-05).
@@ -107,7 +110,7 @@ def main():
           cmd["+y"] == "RIGHT", str(cmd))
     check("CONTROL: the mirrored bend is LEFT, and straight is not a turn",
           cmd["-y"] == "LEFT" and cmd["straight"] in ("LANEFOLLOW", "STRAIGHT"), str(cmd))
-    prev, target, nxt, _ = pol._navigation({"route": W.route_in_ego_frame(straight, 0, 0, 0)})
+    prev, target, nxt, _ = pol._navigation({"route": route_of(straight)})
     check("target points are ahead, spaced along the 1 m route",
           prev[0] > 0 and target[0] > prev[0] and nxt[0] > target[0],
           f"{prev} {target} {nxt}")

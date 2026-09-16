@@ -91,15 +91,18 @@ def main():
           int(cropped[:, :, 1].max()) == 0 and int(cropped[-1, 0, 0]) == 358 % 256)
 
     banner("4. target points from the worker's own route")
+    RM = W.load_route_module(W.DEFAULT_OSC2RUNNER)
+    def route_of(points):              # a fresh plan each: progress is stateful
+        return W.route_in_ego_frame(W.plan_from_route_world(RM, points), 0.0, 0.0, 0.0)
     s_line = np.arange(0.0, 60.0, 0.5)
-    straight = W.route_in_ego_frame(np.stack([s_line, np.zeros_like(s_line)], 1), 0.0, 0.0, 0.0)
+    straight = route_of(np.stack([s_line, np.zeros_like(s_line)], 1))
     tp = M._target_points({"route": straight})
     check("straight route -> (9.5, 0) and (21.5, 0): points 7 and 19 of 2.5 m + 1 m steps",
           np.allclose(tp, [(9.5, 0.0), (21.5, 0.0)]), str(np.round(tp, 3).tolist()))
     ang = np.linspace(0, math.pi / 2, 80)
     bend = np.stack([15 * np.sin(ang), 15 * (1 - np.cos(ang))], 1)
-    tp_r = M._target_points({"route": W.route_in_ego_frame(bend, 0.0, 0.0, 0.0)})
-    tp_l = M._target_points({"route": W.route_in_ego_frame(bend * [1, -1], 0.0, 0.0, 0.0)})
+    tp_r = M._target_points({"route": route_of(bend)})
+    tp_l = M._target_points({"route": route_of(bend * [1, -1])})
     check("a bend toward world +y puts the far point on the RIGHT (+y)",
           tp_r[1][1] > 1.0 and tp_l[1][1] < -1.0,
           f"right {np.round(tp_r[1], 2).tolist()}, mirrored {np.round(tp_l[1], 2).tolist()}")
