@@ -217,6 +217,17 @@ def make_rule_ego_class(prosim_base):
             return VehicleState(x=x, y=y, heading=h, speed=speed,
                                 length=length, width=width)
 
+        def _neighbors(self, a_traj, task, bidx, nidx, ids, extents, step):
+            """Every agent but the ego, as world VehicleStates at trajectory index `step`."""
+            out = []
+            for other in range(a_traj[task]["traj"].shape[1]):
+                if other == nidx:
+                    continue
+                oname = ids[other] if other < len(ids) else None
+                out.append(self._agent_world_state(a_traj, task, bidx, other, step,
+                                                   extents.get(oname, (4.5, 2.0))))
+            return out
+
         def _agent_speed(self, a_traj, task, bidx, nidx, step):
             """Speed in m/s. Prefer the stored velocity channel; fall back to
             differencing positions. The old implementation returned 0.0 for the
@@ -287,17 +298,23 @@ def make_rule_ego_class(prosim_base):
                 state = self._agent_world_state(a_traj, task, bidx, nidx,
                                                 start - 1, ego_ext)
 
+                # A policy that decides from what it sees at the start of a step
+                # (the rule ego, the no-CARLA bridge) is handed the others there.
+                # The CARLA worker instead PLACES them in a world that runs
+                # through the step, so it needs where they are at its END:
+                # handed the start, every car it drew sat 0.1 s behind the ego
+                # (measured 0.05 s, after each tick's own physics carried it
+                # half of that; tools/audit_carla_cells.py A3).
+                at_end = bool(getattr(self.ego_policy, "neighbors_at_step_end", False))
                 for step in range(start, tidx):
-                    neighbors = []
-                    for other in range(a_traj[task]["traj"].shape[1]):
-                        if other == nidx:
-                            continue
-                        oname = ids[other] if other < len(ids) else None
-                        neighbors.append(self._agent_world_state(
-                            a_traj, task, bidx, other, step - 1,
-                            extents.get(oname, (4.5, 2.0))))
-
-                    state = self.ego_policy.step(state, neighbors)
+                    if at_end:
+                        state = self.ego_policy.step(
+                            state, self._neighbors(a_traj, task, bidx, nidx, ids, extents, step),
+                            neighbors_before=self._neighbors(a_traj, task, bidx, nidx, ids,
+                                                             extents, step - 1))
+                    else:
+                        state = self.ego_policy.step(
+                            state, self._neighbors(a_traj, task, bidx, nidx, ids, extents, step - 1))
 
                     # WORLD -> centred -> local, the exact inverse of the read
                     sx, sy, sh = state.x, state.y, state.heading

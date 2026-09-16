@@ -85,6 +85,14 @@ ROUTE_LENGTH_M = 200.0
 #: heading reference and was measured with the raw lane-graph sampling.
 ROUTE_FIRST_M, ROUTE_STEP_M, ROUTE_POINTS = 2.5, 1.0, 20
 
+#: How far along the frozen plan progress is searched for between two
+#: observations. At 0.1 s per step this allows 100 m/s.
+PROGRESS_WINDOW_M = 10.0
+#: Plan kept behind the progress point before the x > 0 filter, so a laterally
+#: offset ego still sees the points just before its nearest one, as it did
+#: before progress was tracked.
+PROGRESS_BACK_M = 5.0
+
 
 def _resample(points: np.ndarray, first_m: float, step_m: float,
               count: int) -> np.ndarray:
@@ -161,6 +169,8 @@ class ExternalEgoPolicy:
         self.dt = float(dt)
         self.route_length = float(route_length)
         self._plan: Optional[np.ndarray] = None      # world frame, frozen
+        self._plan_s: Optional[np.ndarray] = None    # arc length along it
+        self._progress_idx: Optional[int] = None
         self._t = 0.0
         self.last_action: Dict[str, Any] = {}
 
@@ -174,19 +184,44 @@ class ExternalEgoPolicy:
         return np.stack([d[:, 0] * c + d[:, 1] * s,
                          -d[:, 0] * s + d[:, 1] * c], axis=1)
 
+    def _progress(self, state: VehicleState) -> int:
+        """Index of the plan point the ego has reached. Never moves backwards."""
+        d = np.hypot(self._plan[:, 0] - state.x, self._plan[:, 1] - state.y)
+        if self._progress_idx is None:
+            self._progress_idx = int(np.argmin(d))
+        else:
+            s0 = self._plan_s[self._progress_idx]
+            window = np.flatnonzero((self._plan_s >= s0)
+                                    & (self._plan_s <= s0 + PROGRESS_WINDOW_M))
+            self._progress_idx = int(window[np.argmin(d[window])])
+        return self._progress_idx
+
     def _observation(self, state: VehicleState,
                      neighbors: Sequence[VehicleState]) -> Dict[str, Any]:
         if self._plan is None:
             plan = self.route.path_ahead(state, self.route_length)
             self._plan = np.asarray(plan, dtype=float)[:, :2] if len(plan) else None
+            if self._plan is not None:
+                seg = np.linalg.norm(np.diff(self._plan, axis=0), axis=1)
+                self._plan_s = np.concatenate([[0.0], np.cumsum(seg)])
 
         route = []
         if self._plan is not None and len(self._plan):
-            local = self._to_ego(self._plan, state)
-            # Only the part still ahead: the policy extrapolates the ego's
-            # lateral offset back to x = 0 from the first two samples, and
-            # points already behind would put that fit on the wrong side.
+            # Only the part not yet driven. "In front of the car" alone is not
+            # enough: once the ego turns past 90 deg inside a junction, the
+            # approach it already drove is in front again and comes first in
+            # plan order (PlanT 2.0 on left_turn followed it back, 2026-09-14).
+            idx = self._progress(state)
+            start = int(np.searchsorted(self._plan_s, self._plan_s[idx] - PROGRESS_BACK_M))
+            local = self._to_ego(self._plan[start:], state)
+            # And of that, only the part still ahead: the policy extrapolates
+            # the ego's lateral offset back to x = 0 from the first two
+            # samples, and points already behind would put that fit on the
+            # wrong side. If the ego has left the plan so that nothing remains
+            # ahead, the rest of the plan beats an empty route.
             ahead = local[local[:, 0] > 0.0]
+            if len(ahead) < 2 and len(local) >= 2:
+                ahead = local
             if self.action_space == "waypoints" and len(ahead) >= 2:
                 ahead = _resample(ahead, ROUTE_FIRST_M, ROUTE_STEP_M, ROUTE_POINTS)
             route = [[float(x), float(y)] for x, y in ahead[:200]]

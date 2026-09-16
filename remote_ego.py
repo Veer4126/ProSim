@@ -42,6 +42,11 @@ def _pose(v: VehicleState) -> Dict[str, float]:
 class RemoteSensorEgoPolicy:
     """An ego driven by a vision policy inside a CARLA world."""
 
+    #: prosim_ego hands this ego the other agents at the END of each step (and
+    #: their start poses as `neighbors_before`): the worker places them in a
+    #: world that runs through the step, not as an observation to decide from.
+    neighbors_at_step_end = True
+
     def __init__(self, address: str, route, lane_graph=None, *,
                  policy_py: str, policy_request_path: str, town: str,
                  dt: float = 0.1, policy_hz: float = 20.0,
@@ -64,6 +69,9 @@ class RemoteSensorEgoPolicy:
         self.init_reply: Dict[str, Any] = {}
         self.last_reply: Dict[str, Any] = {}
         self.steps = 0
+        #: The worker's light readout at init (step 0) and after every step,
+        #: which run.py writes into the trace's light record.
+        self.light_log = []
 
     # ------------------------------------------------------------------ #
     def _connect(self, state: VehicleState, neighbors: Sequence[VehicleState]):
@@ -86,11 +94,16 @@ class RemoteSensorEgoPolicy:
             "frames_dir": self.frames_dir,
             "ego_light": self.ego_light,
         })
+        if "lights" in self.init_reply:
+            self.light_log.append(dict(self.init_reply["lights"], step=0))
 
-    def step(self, state: VehicleState,
-             neighbors: Sequence[VehicleState] = ()) -> VehicleState:
+    def step(self, state: VehicleState, neighbors: Sequence[VehicleState] = (),
+             neighbors_before: Optional[Sequence[VehicleState]] = None) -> VehicleState:
+        """`neighbors`: the other agents at the end of this step, where the worker
+        moves them to. `neighbors_before`: where they are at its start, used once,
+        to spawn them there."""
         if self._client is None:
-            self._connect(state, neighbors)
+            self._connect(state, neighbors_before if neighbors_before is not None else neighbors)
         if len(neighbors) != self._n_neighbors:
             raise RuntimeError(
                 f"the scene changed size mid-rollout ({self._n_neighbors} -> "
@@ -99,6 +112,8 @@ class RemoteSensorEgoPolicy:
             "op": "step", "actors": [_pose(n) for n in neighbors]})
         self.last_reply = reply
         self.steps += 1
+        if "lights" in reply:
+            self.light_log.append(dict(reply["lights"], step=self.steps))
         ego = reply["ego"]
         return VehicleState(x=float(ego["x"]), y=float(ego["y"]),
                             heading=float(ego["yaw_rad"]),
@@ -117,4 +132,6 @@ class RemoteSensorEgoPolicy:
     def metadata(self) -> Dict[str, Any]:
         return {"worker": self.address, "steps": self.steps,
                 "init": self.init_reply,
+                "signal_roles": self.init_reply.get("signal_roles"),
+                "light_log": self.light_log,
                 "last": {k: v for k, v in self.last_reply.items() if k != "ego"}}

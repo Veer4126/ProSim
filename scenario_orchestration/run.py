@@ -437,6 +437,13 @@ def build_argv(request: dict, policy_request: dict, out_csv: Path,
     source = resolve_source(family, parameters)
     goals = resolve_goals(parameters)
     kind, v0, idm_kwargs, unapplied = resolve_ego_policy(policy_request)
+    if (kind == "external" and str(request.get("algorithm") or "") == "prosim_carla"
+            and str(policy_request.get("observation_space") or "state") == "state"):
+        # On the CARLA arm a state policy drives inside CARLA too, through the
+        # same worker, with osc2runner's object-centric observation and
+        # actuation -- real physics and real collisions, as osc2runner runs it.
+        # The plain prosim arm keeps the no-CARLA bridge (external_ego.py).
+        kind = "carla_state"
 
     argv = [
         sys.executable, "-u", "rollout_carla.py",
@@ -456,15 +463,15 @@ def build_argv(request: dict, policy_request: dict, out_csv: Path,
     policy_py = None
     sensor_worker = None
     ego_light = None
-    if kind == "sensor":
+    if kind in ("sensor", "carla_state"):
         # The worker runs natively on the CARLA node, in the policy's own
         # environment; this process only talks to it. Never guessed: a default
         # port on a shared node is somebody else's world.
         sensor_worker = os.environ.get("PROSIM_SENSOR_WORKER")
         if not sensor_worker:
             raise SystemExit(
-                f"ego policy {policy_request.get('name')!r} observes `sensor`, "
-                "so it runs inside a CARLA world through sensor_worker.py. Set "
+                f"ego policy {policy_request.get('name')!r} runs inside a CARLA "
+                f"world on this arm ({kind}), through sensor_worker.py. Set "
                 "PROSIM_SENSOR_WORKER=HOST:PORT to the worker, started on the "
                 "CARLA node in the policy's environment.")
         policy_py = external_policy_py(policy_request, harness_root)
@@ -505,6 +512,12 @@ def build_argv(request: dict, policy_request: dict, out_csv: Path,
         "source": source,
         "town": source.split("__")[0],
         "scene": source.split("__")[1] if "__" in source else None,
+        # WHICH START TIME. The rollout covers FUTURE_SEC of the recording
+        # beginning at this sample, so two runs that differ only here stage
+        # genuinely different scenes -- a family staged from a standstill and
+        # the same family already at speed. Recorded because nothing else in
+        # the run says so.
+        "example_idx": int(parameters.get("example_idx", 0)),
         "goals": [list(g) for g in goals],
         "ego_policy_kind": kind,
         "ego_sensor_worker": sensor_worker,
@@ -578,6 +591,55 @@ def resolve_ego_id(meta: dict, actor_ids) -> str:
     return min(numeric, key=int) if numeric else sorted(actor_ids)[0]
 
 
+#: osc2runner's signals.COMPLEMENT: the phase crossing approaches take.
+SIGNAL_COMPLEMENT = {"green": "red", "yellow": "red", "red": "green"}
+
+
+def record_signals(recorder, family, parameters: dict, meta: dict, times) -> dict:
+    """The trace's light record, ``context.signal_plan`` -- what the harness
+    scores red_light against (metrics/scenario/scenes.py ``light_plan``).
+
+    CARLA arm: the worker read the ego's junction lights back off CARLA after
+    every step (``ego_remote_session.light_log``), so they are recorded as
+    "simulator", as osc2runner's trace.py ``_record_signals`` does. A CARLA run
+    whose log names no ego light (no signalised junction, or a run from before
+    the log existed) is "none": its lights were not read, so none are claimed.
+    No-CARLA arm: there are no lights to read, so the scenario's declared phase
+    is recorded as "declared", laid out the way signals.apply sets CARLA's
+    (the ego's axis on the phase, crossing approaches on its complement).
+    """
+    if not callable(getattr(recorder, "declare_signals", None)) or not times:
+        return {"signal_source": "not recorded: the harness recorder has no light record"}
+    session = meta.get("ego_remote_session") or {}
+    if session:
+        note = (session.get("init") or {}).get("ego_light") or {}
+        log = session.get("light_log") or []
+        if not any(entry.get("ego") for entry in log):
+            recorder.declare_signals("none", requested=note.get("requested"),
+                                     note="no light governing the ego was read off CARLA")
+            return {"signal_source": "none", "signal_entries": 0}
+        recorder.declare_signals("simulator", frozen=bool(note.get("frozen")),
+                                 requested=note.get("requested"),
+                                 roles=session.get("signal_roles") or {})
+        for entry in log:
+            t = times[min(int(entry.get("step") or 0), len(times) - 1)]
+            recorder.signals(t, ego=entry.get("ego") or None,
+                             opposing=entry.get("opposing") or None,
+                             crossing=entry.get("crossing") or None,
+                             lights=entry.get("lights") or None)
+        return {"signal_source": "simulator", "signal_entries": len(log)}
+    declared = str(parameters.get("ego_light") or FAMILY_EGO_LIGHT.get(family) or "").lower()
+    if declared in SIGNAL_COMPLEMENT:
+        recorder.declare_signals("declared", frozen=True, requested=declared,
+                                 note="no simulator lights on this arm; the scenario's "
+                                      "declared phase, as signals.apply would set it")
+        recorder.signals(times[0], ego=declared, opposing=declared,
+                         crossing=SIGNAL_COMPLEMENT[declared])
+        return {"signal_source": "declared", "signal_entries": 1}
+    recorder.declare_signals("none")
+    return {"signal_source": "none", "signal_entries": 0}
+
+
 def write_trace(recording, output_dir: Path, csv_path: Path, meta: dict,
                 request: dict, detail: dict) -> dict:
     """Transcribe the rollout into states.jsonl + scene.json."""
@@ -637,6 +699,8 @@ def write_trace(recording, output_dir: Path, csv_path: Path, meta: dict,
             polygon=zone.get("polygon"),
         )
 
+    signal_detail = record_signals(recorder, request.get("scenario_family"),
+                                   parameters, meta, times)
     for t in times:
         recorder.tick(t, by_time[t])
     recorder.close()
@@ -648,6 +712,7 @@ def write_trace(recording, output_dir: Path, csv_path: Path, meta: dict,
         "trace_ego_id": ego_id,
         "trace_zone_declared": bool(zone),
         "trace_recorder_errors": recorder.errors,
+        **signal_detail,
         "scenario_duration": (round(times[-1] - times[0], 4) if len(times) > 1
                               else 0.0),
     }
